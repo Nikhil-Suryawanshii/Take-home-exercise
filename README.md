@@ -1,28 +1,81 @@
-# Nursery Room Management System
+# Nursery Room Management API
 
-Laravel 12 (PHP 8.2) and MySQL. Staff check a child into a room and check them out. A manager can ask who is in a room right now.
+## 1. Project Overview
 
-Nursery groups are tenants. Every API request sends `X-Tenant-ID`. One tenant cannot read or change another tenant’s data. Authentication is assumed to be done already. The header is the only tenant input.
+This project is a REST API for managing children in nursery rooms.
 
-## Business rule
+Staff can:
 
-A child cannot be in two rooms at once. If they already have an open stay, a new check-in is **rejected with 409**. The child is not moved.
+- Check children into rooms.
+- Check children out of rooms.
+- View children currently present in a room.
 
-Staff check them out of the first room, then check them into the next one. The occupants list then means “in this room right now,” and a move is an explicit action rather than a side effect of a second check-in.
+The application supports multiple tenants and ensures that one tenant cannot access or modify another tenant's data.
 
-An open stay is a `check_ins` row with `checked_out_at` null.
+## 2. Technology Stack
 
-## Endpoints
+- PHP 8.2
+- Laravel 12
+- MySQL
+- PHPUnit
+- REST API with JSON responses
 
-Laravel prefixes these with `/api`.
+A small React and TypeScript staff screen lives in `frontend/`. The API is the main submission.
 
-| Method and path | Body | Success |
+## 3. Features
+
+- Child check-in and checkout.
+- Current room occupant listing.
+- Tenant-based data isolation using the `X-Tenant-ID` request header.
+- Request validation and error handling.
+- Prevention of multiple active check-ins for the same child.
+- Automated feature tests.
+
+## 4. API Endpoints
+
+| Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST /api/rooms/{room}/check-ins` | `{ "child_id": 1 }` | `201` |
-| `POST /api/check-ins/{id}/check-out` | none | `200` |
-| `GET /api/rooms/{room}/occupants` | none | `200` |
+| POST | `/api/rooms/{room}/check-ins` | Check a child into a room |
+| POST | `/api/check-ins/{id}/check-out` | Check a child out |
+| GET | `/api/rooms/{room}/occupants` | List current occupants |
 
-Send header `X-Tenant-ID: {tenant id}` and `Accept: application/json`.
+Send `X-Tenant-ID` and `Accept: application/json` on every request under the tenant middleware.
+
+### Check-in example
+
+Request header:
+
+`X-Tenant-ID: 1`
+
+Request body:
+
+```json
+{
+  "child_id": 1
+}
+```
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/api/rooms/1/check-ins \
+  -H "X-Tenant-ID: 1" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{"child_id": 1}'
+```
+
+A successful check-in returns `201` with `id`, `room_id`, `child_id`, and `checked_in_at`. The room and child must already belong to that tenant.
+
+### Check-out example
+
+`POST /api/check-ins/15/check-out`
+
+Include the appropriate `X-Tenant-ID` header. A successful check-out returns `200` and adds `checked_out_at`.
+
+### List occupants example
+
+`GET /api/rooms/1/occupants`
+
+Include the appropriate `X-Tenant-ID` header. Each occupant is `check_in_id`, `child_id`, and `name`. An empty room returns `200` and `[]`.
 
 ### Status codes
 
@@ -35,47 +88,105 @@ Send header `X-Tenant-ID: {tenant id}` and `Accept: application/json`.
 | Check-out of a stay that is already closed | `409` |
 | Empty room | `200` and `[]` |
 
-A cross-tenant id is `404`, not `403`, so the response does not reveal that the row exists.
+A cross-tenant id is `404`, so the response does not reveal that the row exists.
 
-Occupant items are `check_in_id`, `child_id`, and `name`. A check-in response includes `id`, `room_id`, `child_id`, and `checked_in_at`. A check-out response adds `checked_out_at`.
+## 5. Business Decision
 
-## Requirements
+### Preventing multiple active check-ins
+
+A child cannot be checked into a second room while an existing check-in remains active.
+
+The API rejects the new check-in with `409` and requires staff to check the child out of the existing room first. The child is not moved automatically.
+
+This approach prevents accidental room changes and maintains consistent records of each child's current location.
+
+An open stay is a `check_ins` row with `checked_out_at` null.
+
+## 6. Tenant Isolation
+
+Every relevant database query is scoped to the current tenant.
+
+The `X-Tenant-ID` header identifies the tenant for the exercise. `ResolveTenant` reads it once and stores the tenant on the request. `Room`, `Child`, and `CheckIn` use a `forTenant` scope, and each of those tables stores `tenant_id` on the row.
+
+Requests attempting to read or modify another tenant's records are rejected with `404`.
+
+Authentication is assumed to be handled externally, as specified in the assignment.
+
+## 7. Installation and Setup
+
+### Prerequisites
 
 - PHP 8.2
 - Composer
 - MySQL
 
-## Setup
+The Laravel application is in `backend/`.
 
-Create the app database and a separate one for tests. PHPUnit wipes `nursery_testing`.
+### Installation
+
+Clone the repository:
+
+```bash
+git clone YOUR_REPOSITORY_URL
+cd YOUR_PROJECT_DIRECTORY
+```
+
+Create the app database and a separate one for tests. PHPUnit uses `nursery_testing` and does not wipe `nursery`.
 
 ```sql
 CREATE DATABASE nursery CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE nursery_testing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-From `backend/`:
+Install dependencies from `backend/`:
 
 ```bash
+cd backend
 composer install
+```
+
+Create the environment file:
+
+```bash
 cp .env.example .env
+```
+
+Generate the application key:
+
+```bash
 php artisan key:generate
 ```
 
-`.env.example` already points at MySQL database `nursery` on `127.0.0.1:3306` as user `root` with an empty password. Change `DB_USERNAME` and `DB_PASSWORD` if yours differ. That user must be able to create and drop tables in both databases.
+`.env.example` already points at MySQL. Set your own user and password if they differ:
 
-`phpunit.xml` sets `DB_DATABASE` to `nursery_testing`, with the same host and user. Change the test username and password there too if you change `.env`.
+```dotenv
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=nursery
+DB_USERNAME=root
+DB_PASSWORD=
+```
+
+`phpunit.xml` sets `DB_DATABASE` to `nursery_testing` with the same host and user. Change the test username and password there too if you change `.env`.
+
+Run the migrations:
 
 ```bash
 php artisan migrate
+```
+
+Start the Laravel development server:
+
+```bash
 php artisan serve
 ```
 
-The API is at `http://127.0.0.1:8000`.
+The default local URL is `http://127.0.0.1:8000`.
 
-## Staff screen
+### Staff screen
 
-The React app is in `frontend/`. A nav bar opens nursery groups, rooms, children, and who is here as separate screens. Names can be added, renamed, and deleted. Open a room to see who is there and check a child in by name. Vite proxies `/api` to `http://127.0.0.1:8000`, so start the Laravel server first.
+From `frontend/`, after the API is running:
 
 ```bash
 cd frontend
@@ -83,23 +194,9 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints. Tests:
+Vite proxies `/api` to `http://127.0.0.1:8000`. The nav bar opens nursery groups, rooms, children, and who is here as separate screens.
 
-```bash
-npm test
-```
-
-```bash
-curl -i -X POST http://127.0.0.1:8000/api/rooms/1/check-ins \
-  -H "X-Tenant-ID: 1" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json" \
-  -d '{"child_id": 1}'
-```
-
-Rooms, children, and tenants must already exist for that call. A missing room or child returns `404`.
-
-## Tests
+## 8. Running Tests
 
 From `backend/`:
 
@@ -107,51 +204,42 @@ From `backend/`:
 php artisan test
 ```
 
-Tests use `RefreshDatabase` against `nursery_testing`. They do not wipe `nursery`. They call the HTTP routes.
+Tests call the HTTP routes against `nursery_testing`. They cover:
 
-## Design
+- Successful check-in and checkout.
+- Current occupant listing.
+- Invalid room and child IDs.
+- Duplicate active check-ins.
+- Already checked-out records.
+- Tenant isolation for reading and modifying data.
 
-Controllers stay thin. `CheckInChild`, `CheckOutChild`, and `ListRoomOccupants` hold the rules. `ResolveTenant` reads `X-Tenant-ID` once and stores the tenant on the request. `CurrentTenant` is what controllers use, so they do not read the header.
+Frontend tests, from `frontend/`:
 
-`Room`, `Child`, and `CheckIn` share a `forTenant` scope. Each of those tables stores `tenant_id` on the row. Queries do not discover the tenant by joining through a parent.
-
-```
-backend/
-  app/Models/Tenant.php
-  app/Models/Room.php
-  app/Models/Child.php
-  app/Models/CheckIn.php
-  app/Http/Middleware/ResolveTenant.php
-  app/Actions/CheckInChild.php
-  app/Actions/CheckOutChild.php
-  app/Actions/ListRoomOccupants.php
-  app/Http/Controllers/CheckInController.php
-  app/Http/Controllers/OccupantController.php
-  routes/api.php
-  tests/Feature/CheckInTest.php
-  tests/Feature/CheckOutTest.php
-  tests/Feature/OccupantsTest.php
-  tests/Feature/TenantIsolationTest.php
+```bash
+npm test
 ```
 
-## With more time
+## 9. Future Improvements
 
-Add a MySQL constraint so only one open stay can exist per child, for example a generated column that is the child id while `checked_out_at` is null and a unique key on that column. This pass enforces the rule in `CheckInChild`, with a row lock, and covers it in tests. The database rule was left out so the behaviour stayed in one place that the tests already describe.
+With more time, I would:
 
-## Left out on purpose
+- Add a MySQL unique rule so only one open stay can exist per child.
+- Add further concurrency and edge-case tests.
+- Improve API documentation.
+- Expand integration tests and monitoring.
 
-- Authentication
+The open-stay rule is enforced in `CheckInChild` with a row lock, and covered by tests.
+
+## 10. Intentionally Left Out
+
+- Login and registration, because authentication is assumed to be handled.
 - A `nurseries` table. The tenant is the boundary. The API never receives a nursery id.
 - Editing a check-in row by hand. Stays are opened and closed through check-in and check-out.
 
-## AI tools
+## 11. AI Tool Usage
 
-AI was used to turn the brief into the phase notes in `mdFiles/`, to implement the Laravel API (models, tenant middleware, actions, controllers, and feature tests), and to draft this README.
+I used an AI assistant for these improvements:
 
-Rejected or changed from that output:
-
-- SQLite was rejected. This project uses MySQL.
-- Laravel 13 was rejected because this machine is PHP 8.2. The app is Laravel 12.
-- Automatically moving a child into a second room was rejected. A second check-in returns `409`.
-- Cross-tenant access returns `404`, not `403`.
-- Tests call the routes. They do not call the actions directly.
+- Controllers: tighter validation and clearer status codes.
+- Check-in: a child with an open stay cannot be checked into another room. That request returns `409`.
+- Check-out: checking out a stay that is already closed returns `409`.
